@@ -5,10 +5,10 @@ pub struct ListNode {
 }
 
 impl ListNode {
-    #[inline]
-    fn new(val: i32) -> Self {
-        ListNode { next: None, val }
-    }
+    // #[inline]
+    // fn new(val: i32) -> Self {
+    //     ListNode { next: None, val }
+    // }
 }
 
 pub fn reverse_list(mut node: Option<Box<ListNode>>) -> Option<Box<ListNode>> {
@@ -30,7 +30,7 @@ mod tests {
 
     #[test]
     fn reverse_list_reverses_list() {
-        let node_3 = ListNode::new(3);
+        let node_3 = ListNode { val: 3, next: None };
         let node_2 = ListNode {
             val: 2,
             next: Some(Box::new(node_3)),
