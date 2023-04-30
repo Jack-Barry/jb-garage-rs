@@ -1,2 +1,2 @@
 [workspace]
-members = ["linked_list"]
+members = ["linked_list", "versioner_core"]
