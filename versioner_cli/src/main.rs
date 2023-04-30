@@ -1,8 +1,5 @@
-use config::get_config_from_dir;
-use fs_tools::use_current_working_dir;
-
-mod config;
-mod fs_tools;
+use jbg_fs::use_current_working_dir;
+use versioner_core::get_config_from_dir;
 
 fn main() {
     match use_current_working_dir(get_config_from_dir) {

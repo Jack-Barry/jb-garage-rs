@@ -1,7 +1,6 @@
 # `versioner_core`
 
-For now this is being written as an executable, but in the future will just be
-the lib for core functionality for versioner
+Lib for core functionality for versioner
 
 ## What is Versioner?
 

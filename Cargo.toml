@@ -1,2 +1,2 @@
 [workspace]
-members = ["linked_list", "versioner_core"]
+members = ["jbg_fs", "jbg_linked_list", "versioner_cli", "versioner_core"]
