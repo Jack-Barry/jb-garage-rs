@@ -1,2 +1,2 @@
 [workspace]
-members = ["linked_list"]
+members = ["git_clean", "linked_list"]
