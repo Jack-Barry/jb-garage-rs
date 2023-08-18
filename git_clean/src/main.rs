@@ -13,12 +13,12 @@ fn main() {
         Err(e) => panic!("Failed to open repo: {}", e),
     };
 
-    let default_branch_name = get_default_branch(&repo);
-
     let branches = match repo.branches(Some(BranchType::Local)) {
         Ok(branches) => branches,
         Err(e) => panic!("Failed to get branches: {}", e),
     };
+
+    let default_branch_name = get_default_branch(&repo);
 
     branches.for_each(|branch| handle_branch(&repo, &default_branch_name, branch));
 }
@@ -72,8 +72,8 @@ fn handle_branch(
 ) {
     match branch {
         Ok(mut verified_branch) => {
-            // skip the current branch
             if verified_branch.0.is_head() {
+                println!("Skipping current branch");
                 return;
             }
 
@@ -82,9 +82,10 @@ fn handle_branch(
                     Some(branch_name_str) => {
                         match default_branch {
                             Some(default_branch_str) => {
-                                // Skip deleting the default branch
-                                if default_branch_str.replace("refs/heads/", "") == branch_name_str
-                                {
+                                let default_branch_name =
+                                    default_branch_str.replace("refs/heads/", "");
+                                if default_branch_name == branch_name_str {
+                                    println!("Skipping default branch: {}", default_branch_name);
                                     return;
                                 }
                             }
