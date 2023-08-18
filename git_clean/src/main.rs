@@ -33,16 +33,8 @@ fn handle_branch(repo: &Repository, branch: Result<(Branch, BranchType), Error>)
         Ok(mut verified_branch) => match verified_branch.0.name() {
             Ok(branch_name) => match branch_name {
                 Some(branch_name_str) => {
-                    let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
-                    if will_delete_local_branch {
-                        handle_upstream_branch(repo, &verified_branch);
-                        match verified_branch.0.delete() {
-                            Ok(_) => {}
-                            Err(e) => {
-                                println!("Error when deleting local branch: {}", e)
-                            }
-                        };
-                    }
+                    let branch_name_str_copy = branch_name_str.to_string();
+                    delete_local_branch(repo, &mut verified_branch, &branch_name_str_copy)
                 }
                 None => {}
             },
@@ -54,6 +46,23 @@ fn handle_branch(repo: &Repository, branch: Result<(Branch, BranchType), Error>)
             println!("Unable to use branch: {}", e)
         }
     };
+}
+
+fn delete_local_branch(
+    repo: &Repository,
+    verified_branch: &mut (Branch, BranchType),
+    branch_name_str: &str,
+) {
+    let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
+    if will_delete_local_branch {
+        handle_upstream_branch(repo, &verified_branch);
+        match verified_branch.0.delete() {
+            Ok(_) => {}
+            Err(e) => {
+                println!("Error when deleting local branch: {}", e)
+            }
+        };
+    }
 }
 
 fn handle_upstream_branch(repo: &Repository, branch: &(Branch, BranchType)) {
