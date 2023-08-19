@@ -1,6 +1,13 @@
 use dialoguer::{theme::ColorfulTheme, Confirm};
-use git2::{Branch, BranchType, Direction, Error, Repository};
-use std::env;
+use dirs::home_dir;
+use git2::{Branch, BranchType, Cred, Direction, Error, PushOptions, RemoteCallbacks, Repository};
+use std::{
+    env::{self, consts::OS},
+    fs::File,
+    io::Read,
+    path::PathBuf,
+    process::exit,
+};
 
 fn main() {
     let cwd = match env::current_dir() {
@@ -115,12 +122,12 @@ fn delete_local_branch(
     let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
     if will_delete_local_branch {
         handle_upstream_branch(repo, &verified_branch);
-        match verified_branch.0.delete() {
-            Err(e) => {
-                println!("Error when deleting local branch: {}", e)
-            }
-            _ => (),
-        };
+        // match verified_branch.0.delete() {
+        //     Err(e) => {
+        //         println!("Error when deleting local branch: {}", e)
+        //     }
+        //     _ => (),
+        // };
     }
 }
 
@@ -144,8 +151,23 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
         refspec.push_str(branch_ref);
         let refspecs = &[refspec];
 
+        let mut push_options = PushOptions::new();
+        let mut remote_callbacks = RemoteCallbacks::new();
+        remote_callbacks.credentials(|_url, username_from_url, _allowed_types| {
+            get_gh_cli_auth_token();
+
+            match username_from_url {
+                Some(username) => Cred::ssh_key_from_agent(username),
+                _ => {
+                    println!("Unable to authenticate to push");
+                    exit(1)
+                }
+            }
+        });
+        push_options.remote_callbacks(remote_callbacks);
+
         match repo.find_remote(remote_str) {
-            Ok(mut repo_remote) => match repo_remote.push(refspecs, None) {
+            Ok(mut repo_remote) => match repo_remote.push(refspecs, Some(&mut push_options)) {
                 Err(e) => {
                     println!("Encountered trouble deleting remote branch: {}", e)
                 }
@@ -156,4 +178,42 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
             }
         }
     }
+}
+
+fn get_gh_cli_auth_token() {
+    let config_path = get_gh_cli_config_path();
+    println!("{:?}", config_path);
+    let mut config_content = String::new();
+    match File::open(config_path) {
+        Ok(mut file) => {
+            match file.read_to_string(&mut config_content) {
+                Err(e) => {
+                    panic!("Failed to read config file contents: {}", e)
+                }
+                _ => {
+                    println!("{}", config_content);
+                }
+            };
+        }
+        Err(e) => {
+            panic!("Failed to open config file: {}", e)
+        }
+    }
+}
+
+fn get_gh_cli_config_path() -> PathBuf {
+    match OS {
+        "windows" => {
+            let appdata_dir = env::var("APPDATA").expect("Failed to determine APPDATA directory");
+            gh_config_path_from_base(PathBuf::from(appdata_dir))
+        }
+        _ => {
+            let home_dir = home_dir().expect("Failed to determine home directory");
+            gh_config_path_from_base(home_dir.join(".config"))
+        }
+    }
+}
+
+fn gh_config_path_from_base(base: PathBuf) -> PathBuf {
+    base.join("gh").join("hosts.yml")
 }
