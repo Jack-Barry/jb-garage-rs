@@ -1,12 +1,12 @@
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use dirs::home_dir;
 use git2::{Branch, BranchType, Cred, Direction, Error, PushOptions, RemoteCallbacks, Repository};
+use serde_derive::Deserialize;
 use std::{
     env::{self, consts::OS},
     fs::File,
     io::Read,
     path::PathBuf,
-    process::exit,
 };
 
 fn main() {
@@ -122,12 +122,12 @@ fn delete_local_branch(
     let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
     if will_delete_local_branch {
         handle_upstream_branch(repo, &verified_branch);
-        // match verified_branch.0.delete() {
-        //     Err(e) => {
-        //         println!("Error when deleting local branch: {}", e)
-        //     }
-        //     _ => (),
-        // };
+        match verified_branch.0.delete() {
+            Err(e) => {
+                println!("Error when deleting local branch: {}", e)
+            }
+            _ => (),
+        };
     }
 }
 
@@ -153,16 +153,9 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
 
         let mut push_options = PushOptions::new();
         let mut remote_callbacks = RemoteCallbacks::new();
-        remote_callbacks.credentials(|_url, username_from_url, _allowed_types| {
-            get_gh_cli_auth_token();
-
-            match username_from_url {
-                Some(username) => Cred::ssh_key_from_agent(username),
-                _ => {
-                    println!("Unable to authenticate to push");
-                    exit(1)
-                }
-            }
+        remote_callbacks.credentials(|_, _, _| {
+            let gh_cli = get_gh_cli_auth();
+            Cred::userpass_plaintext(&gh_cli.user, &gh_cli.oauth_token)
         });
         push_options.remote_callbacks(remote_callbacks);
 
@@ -180,19 +173,39 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
     }
 }
 
-fn get_gh_cli_auth_token() {
+#[derive(Debug, Deserialize)]
+struct GhCliConfig {
+    #[serde(rename = "github.com")]
+    github_com: NestedGhCliConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct NestedGhCliConfig {
+    #[serde(rename = "user")]
+    user: String,
+    #[serde(rename = "oauth_token")]
+    oauth_token: String,
+    // git_protocol: String,
+}
+
+fn get_gh_cli_auth() -> NestedGhCliConfig {
     let config_path = get_gh_cli_config_path();
-    println!("{:?}", config_path);
     let mut config_content = String::new();
+
     match File::open(config_path) {
         Ok(mut file) => {
             match file.read_to_string(&mut config_content) {
                 Err(e) => {
-                    panic!("Failed to read config file contents: {}", e)
+                    panic!("Failed to read config file contents: {}", e);
                 }
-                _ => {
-                    println!("{}", config_content);
-                }
+                _ => match serde_yaml::from_str::<GhCliConfig>(&config_content) {
+                    Ok(yaml) => {
+                        return yaml.github_com;
+                    }
+                    Err(e) => {
+                        panic!("Failed to parse config content: {}", e);
+                    }
+                },
             };
         }
         Err(e) => {
