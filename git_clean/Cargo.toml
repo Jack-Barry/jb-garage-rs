@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.75"
 dialoguer = "0.10.4"
 dirs = "5.0.1"
 git2 = "0.17.2"

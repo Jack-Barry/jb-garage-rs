@@ -1,6 +1,10 @@
+use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 use dirs::home_dir;
-use git2::{Branch, BranchType, Cred, Direction, Error, PushOptions, RemoteCallbacks, Repository};
+use git2::{
+    Branch, BranchType, Cred, Direction, Error as Git2Error, ErrorCode, PushOptions,
+    RemoteCallbacks, Repository,
+};
 use serde_derive::Deserialize;
 use std::{
     env::{self, consts::OS},
@@ -9,142 +13,122 @@ use std::{
     path::PathBuf,
 };
 
-fn main() {
-    let cwd = match env::current_dir() {
-        Ok(path) => path,
-        Err(e) => panic!("Failed to determine cwd: {}", e),
-    };
+fn main() -> Result<()> {
+    let cwd = env::current_dir().with_context(|| "Failed to determine cwd")?;
+    let repo = Repository::open(cwd).with_context(|| "Failed to open repo")?;
+    let branches = repo
+        .branches(Some(BranchType::Local))
+        .with_context(|| "Failed to get branches")?;
 
-    let repo = match Repository::open(cwd) {
-        Ok(repo) => repo,
-        Err(e) => panic!("Failed to open repo: {}", e),
-    };
+    let default_branch_name = get_default_branch(&repo)?;
 
-    let branches = match repo.branches(Some(BranchType::Local)) {
-        Ok(branches) => branches,
-        Err(e) => panic!("Failed to get branches: {}", e),
-    };
-
-    let default_branch_name = get_default_branch(&repo);
-
-    branches.for_each(|branch| handle_branch(&repo, &default_branch_name, branch));
+    branches.for_each(
+        |branch| match handle_branch(&repo, &default_branch_name, branch) {
+            Err(error) => {
+                println!("Error encountered handling branch: {}", error)
+            }
+            _ => (),
+        },
+    );
+    Ok(())
 }
 
 fn prompt_user_for_delete(name: &str) -> bool {
     Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt(format!("Do you want to delete {}?", name))
         .interact()
-        .unwrap()
+        .unwrap_or(false)
 }
 
-fn get_default_branch(repo: &Repository) -> Option<String> {
-    match repo.find_remote("origin") {
-        Ok(mut remote) => match remote.connect(Direction::Fetch) {
-            Ok(_) => {
-                let default_branch_result = remote.default_branch();
-                match remote.disconnect() {
-                    Err(e) => {
-                        println!("Unable to disconnect from remote: {}", e)
-                    }
-                    _ => {}
-                };
+fn get_default_branch(repo: &Repository) -> Result<String> {
+    let mut remote = repo
+        .find_remote("origin")
+        .with_context(|| "Unable to find remote")?;
 
-                match default_branch_result {
-                    Ok(default_branch) => match String::from_utf8(default_branch.to_vec()) {
-                        Ok(default_branch_str) => Some(default_branch_str),
-                        Err(e) => {
-                            println!("Unable to get string from default branch: {}", e);
-                            None
-                        }
-                    },
-                    _ => None,
-                }
-            }
-            Err(e) => {
-                println!("Error connecting to remote: {}", e);
-                None
-            }
-        },
-        Err(e) => {
-            println!("Error finding remote: {}", e);
-            None
-        }
-    }
+    remote
+        .connect(Direction::Fetch)
+        .with_context(|| "Unable to connect to remote")?;
+
+    let default_branch_result = remote.default_branch();
+
+    remote
+        .disconnect()
+        .unwrap_or_else(|error| println!("Unable to disconnect from remote: {}", error));
+
+    let default_branch = default_branch_result?;
+
+    let default_branch_str = String::from_utf8(default_branch.to_vec())?;
+    Ok(default_branch_str)
 }
 
 fn handle_branch(
     repo: &Repository,
-    default_branch: &Option<String>,
-    branch: Result<(Branch, BranchType), Error>,
-) {
-    match branch {
-        Ok(mut verified_branch) => {
-            if verified_branch.0.is_head() {
-                println!("Skipping current branch");
-                return;
-            }
+    default_branch: &String,
+    branch: Result<(Branch, BranchType), Git2Error>,
+) -> Result<()> {
+    let mut verified_branch = branch.with_context(|| "Unable to use branch")?;
 
-            match verified_branch.0.name() {
-                Ok(branch_name) => match branch_name {
-                    Some(branch_name_str) => {
-                        match default_branch {
-                            Some(default_branch_str) => {
-                                let default_branch_name =
-                                    default_branch_str.replace("refs/heads/", "");
-                                if default_branch_name == branch_name_str {
-                                    println!("Skipping default branch: {}", default_branch_name);
-                                    return;
-                                }
-                            }
-                            _ => (),
-                        }
-                        let branch_name_str_copy = branch_name_str.to_string();
-                        delete_local_branch(repo, &mut verified_branch, &branch_name_str_copy)
-                    }
-                    _ => (),
-                },
-                Err(e) => {
-                    println!("Unable to get name of branch: {}", e)
-                }
-            }
+    if verified_branch.0.is_head() {
+        println!("Skipping current branch");
+        return Ok(());
+    }
+
+    if let Some(branch_name_str) = verified_branch.0.name()? {
+        let default_branch_name = default_branch.replace("refs/heads/", "");
+        if default_branch_name == branch_name_str {
+            println!("Skipping default branch: {}", default_branch_name);
+            return Ok(());
         }
-        Err(e) => {
-            println!("Unable to use branch: {}", e)
-        }
+
+        let branch_name_str_copy = branch_name_str.to_string();
+        delete_local_branch(repo, &mut verified_branch, &branch_name_str_copy)?;
     };
+
+    Ok(())
 }
 
 fn delete_local_branch(
     repo: &Repository,
     verified_branch: &mut (Branch, BranchType),
     branch_name_str: &str,
-) {
+) -> Result<()> {
     let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
     if will_delete_local_branch {
-        handle_upstream_branch(repo, &verified_branch);
-        match verified_branch.0.delete() {
-            Err(e) => {
-                println!("Error when deleting local branch: {}", e)
-            }
-            _ => (),
-        };
+        handle_upstream_branch(repo, &verified_branch)
+            .with_context(|| "Encountered problem handling remote branch")?;
+        verified_branch
+            .0
+            .delete()
+            .with_context(|| "Encountered problem deleting local branch")?;
     }
+
+    Ok(())
 }
 
-fn handle_upstream_branch(repo: &Repository, branch: &(Branch, BranchType)) {
-    match branch.0.get().name() {
-        Some(branch_ref) => match repo.branch_upstream_remote(branch_ref) {
-            Ok(remote) => match remote.as_str() {
-                Some(remote_str) => delete_upstream_branch(repo, branch_ref, remote_str),
-                _ => (),
+fn handle_upstream_branch(repo: &Repository, branch: &(Branch, BranchType)) -> Result<()> {
+    if let Some(branch_ref) = branch.0.get().name() {
+        let remote = match repo.branch_upstream_remote(branch_ref) {
+            Ok(r) => r,
+            Err(error) => match error.code() {
+                // Expected for some branches not to have a remote counterpart
+                ErrorCode::NotFound => {
+                    return Ok(());
+                }
+                _ => {
+                    return Err(anyhow::Error::from(error));
+                }
             },
-            _ => (),
-        },
-        _ => (),
+        };
+
+        if let Some(remote_str) = remote.as_str() {
+            return delete_upstream_branch(repo, branch_ref, remote_str);
+        }
     }
+
+    Ok(())
 }
 
-fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str) {
+fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str) -> Result<()> {
     let will_delete_upstream_branch = prompt_user_for_delete(branch_ref);
     if will_delete_upstream_branch {
         let mut refspec: String = ":".to_owned();
@@ -153,24 +137,26 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
 
         let mut push_options = PushOptions::new();
         let mut remote_callbacks = RemoteCallbacks::new();
-        remote_callbacks.credentials(|_, _, _| {
-            let gh_cli = get_gh_cli_auth();
-            Cred::userpass_plaintext(&gh_cli.user, &gh_cli.oauth_token)
+
+        remote_callbacks.credentials(|_, _, _| match get_gh_cli_auth() {
+            Ok(gh_cli) => Cred::userpass_plaintext(&gh_cli.user, &gh_cli.oauth_token),
+            Err(e) => {
+                eprintln!("GitHub CLI auth error: {}", e);
+                Cred::default()
+            }
         });
         push_options.remote_callbacks(remote_callbacks);
 
-        match repo.find_remote(remote_str) {
-            Ok(mut repo_remote) => match repo_remote.push(refspecs, Some(&mut push_options)) {
-                Err(e) => {
-                    println!("Encountered trouble deleting remote branch: {}", e)
-                }
-                _ => (),
-            },
-            Err(e) => {
-                println!("Failed to find remote: {}", e)
-            }
-        }
+        let mut repo_remote = repo
+            .find_remote(remote_str)
+            .with_context(|| "Unable to find remote")?;
+
+        repo_remote
+            .push(refspecs, Some(&mut push_options))
+            .with_context(|| "Encountered trouble deleting remote branch")?;
     }
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,30 +174,20 @@ struct NestedGhCliConfig {
     // git_protocol: String,
 }
 
-fn get_gh_cli_auth() -> NestedGhCliConfig {
+fn get_gh_cli_auth() -> Result<NestedGhCliConfig> {
     let config_path = get_gh_cli_config_path();
     let mut config_content = String::new();
 
-    match File::open(config_path) {
-        Ok(mut file) => {
-            match file.read_to_string(&mut config_content) {
-                Err(e) => {
-                    panic!("Failed to read config file contents: {}", e);
-                }
-                _ => match serde_yaml::from_str::<GhCliConfig>(&config_content) {
-                    Ok(yaml) => {
-                        return yaml.github_com;
-                    }
-                    Err(e) => {
-                        panic!("Failed to parse config content: {}", e);
-                    }
-                },
-            };
-        }
-        Err(e) => {
-            panic!("Failed to open config file: {}", e)
-        }
-    }
+    let mut file =
+        File::open(config_path).with_context(|| "Failed to open GitHub auth config file")?;
+
+    file.read_to_string(&mut config_content)
+        .with_context(|| "Failed to read GitHub auth config file contents")?;
+
+    let yaml = serde_yaml::from_str::<GhCliConfig>(&config_content)
+        .with_context(|| "Unable to parse GitHub auth config file")?;
+
+    Ok(yaml.github_com)
 }
 
 fn get_gh_cli_config_path() -> PathBuf {
