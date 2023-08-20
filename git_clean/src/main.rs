@@ -1,17 +1,12 @@
+mod gh_cli_auth;
 use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm};
-use dirs::home_dir;
+use gh_cli_auth::get_gh_cli_auth;
 use git2::{
     Branch, BranchType, Cred, Direction, Error as Git2Error, ErrorCode, PushOptions,
     RemoteCallbacks, Repository,
 };
-use serde_derive::Deserialize;
-use std::{
-    env::{self, consts::OS},
-    fs::File,
-    io::Read,
-    path::PathBuf,
-};
+use std::env::{self};
 
 fn main() -> Result<()> {
     let cwd = env::current_dir().with_context(|| "Failed to determine cwd")?;
@@ -22,14 +17,11 @@ fn main() -> Result<()> {
 
     let default_branch_name = get_default_branch(&repo)?;
 
-    branches.for_each(
-        |branch| match handle_branch(&repo, &default_branch_name, branch) {
-            Err(error) => {
-                println!("Error encountered handling branch: {}", error)
-            }
-            _ => (),
-        },
-    );
+    branches.for_each(|branch| {
+        if let Err(error) = handle_branch(&repo, &default_branch_name, branch) {
+            println!("Error encountered handling branch: {}", error)
+        }
+    });
     Ok(())
 }
 
@@ -55,15 +47,13 @@ fn get_default_branch(repo: &Repository) -> Result<String> {
         .disconnect()
         .unwrap_or_else(|error| println!("Unable to disconnect from remote: {}", error));
 
-    let default_branch = default_branch_result?;
-
-    let default_branch_str = String::from_utf8(default_branch.to_vec())?;
+    let default_branch_str = String::from_utf8(default_branch_result?.to_vec())?;
     Ok(default_branch_str)
 }
 
 fn handle_branch(
     repo: &Repository,
-    default_branch: &String,
+    default_branch: &str,
     branch: Result<(Branch, BranchType), Git2Error>,
 ) -> Result<()> {
     let mut verified_branch = branch.with_context(|| "Unable to use branch")?;
@@ -94,7 +84,7 @@ fn delete_local_branch(
 ) -> Result<()> {
     let will_delete_local_branch = prompt_user_for_delete(branch_name_str);
     if will_delete_local_branch {
-        handle_upstream_branch(repo, &verified_branch)
+        handle_upstream_branch(repo, verified_branch)
             .with_context(|| "Encountered problem handling remote branch")?;
         verified_branch
             .0
@@ -157,52 +147,4 @@ fn delete_upstream_branch(repo: &Repository, branch_ref: &str, remote_str: &str)
     }
 
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct GhCliConfig {
-    #[serde(rename = "github.com")]
-    github_com: NestedGhCliConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct NestedGhCliConfig {
-    #[serde(rename = "user")]
-    user: String,
-    #[serde(rename = "oauth_token")]
-    oauth_token: String,
-    // git_protocol: String,
-}
-
-fn get_gh_cli_auth() -> Result<NestedGhCliConfig> {
-    let config_path = get_gh_cli_config_path();
-    let mut config_content = String::new();
-
-    let mut file =
-        File::open(config_path).with_context(|| "Failed to open GitHub auth config file")?;
-
-    file.read_to_string(&mut config_content)
-        .with_context(|| "Failed to read GitHub auth config file contents")?;
-
-    let yaml = serde_yaml::from_str::<GhCliConfig>(&config_content)
-        .with_context(|| "Unable to parse GitHub auth config file")?;
-
-    Ok(yaml.github_com)
-}
-
-fn get_gh_cli_config_path() -> PathBuf {
-    match OS {
-        "windows" => {
-            let appdata_dir = env::var("APPDATA").expect("Failed to determine APPDATA directory");
-            gh_config_path_from_base(PathBuf::from(appdata_dir))
-        }
-        _ => {
-            let home_dir = home_dir().expect("Failed to determine home directory");
-            gh_config_path_from_base(home_dir.join(".config"))
-        }
-    }
-}
-
-fn gh_config_path_from_base(base: PathBuf) -> PathBuf {
-    base.join("gh").join("hosts.yml")
 }
